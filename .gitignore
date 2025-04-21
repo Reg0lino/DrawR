@@ -1,0 +1,37 @@
+# Environment variables
+.env
+
+# Google Cloud credentials
+drawr-vertex-key.json
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE specific files
+.vscode/
+.idea/
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Logs and generated files
+logs/
+captured_images/
+generated_images/
+drawing_history/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/

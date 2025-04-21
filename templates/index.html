@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Drawing Assistant</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AI Drawing Assistant</h1>
+        </header>
+
+        <!-- AI Feedback at the top -->
+        <div class="feedback-area" style="margin-bottom: 20px;">
+            <h2>AI Feedback</h2>
+            <div id="feedbackText" class="feedback-text"></div>
+        </div>
+
+        <!-- Controls bar under feedback -->
+        <div class="controls" style="margin-bottom: 30px; display: flex; flex-wrap: wrap; align-items: center;">
+            <button id="assistanceBtn" class="btn primary">Request Assistance</button>
+            <button id="generateReferenceBtn" class="btn success" style="background:#2ecc71;" disabled>Generate Reference</button> <!-- Renamed button -->
+            <button id="restartSessionBtn" class="btn secondary" style="background:#e67e22;">Restart Session</button>
+            <label for="ttsVoiceSelect" style="margin-left:20px;">TTS Voice:</label>
+            <select id="ttsVoiceSelect" style="padding: 5px;"></select>
+            <label for="ttsSpeedSlider" style="margin-left:10px;">Speed:</label>
+            <input type="range" id="ttsSpeedSlider" min="80" max="250" value="150" step="1" style="width:100px;">
+            <span id="ttsSpeedValue">150</span>
+            <button id="ttsToggleBtn" class="btn secondary" title="Toggle TTS" style="font-size:20px;">🔊</button>
+
+            <!-- Prompt input on its own line -->
+            <div style="width: 100%; margin-top: 15px; display: flex; align-items: center;">
+                <input type="text" id="systemPromptInput" placeholder="Edit system prompt..." style="flex-grow: 1; margin-right: 10px;">
+                <button id="updatePromptBtn" class="btn secondary">Update Prompt</button>
+            </div>
+            <div id="loadingBar" style="display:none;width:100%;height:8px;background:#eee;margin-top:10px;">
+                <div id="loadingBarInner" style="width:0;height:100%;background:#3498db;transition:width 0.5s;"></div>
+            </div>
+        </div>
+
+        <!-- Two-column layout: left = live, right = last snapped / generated reference -->
+        <main style="display: flex; gap: 30px;">
+            <div class="camera-feed" style="flex: 1;">
+                <h2>Live Feed</h2>
+                <img src="{{ url_for('video_feed') }}" alt="Camera Feed" id="videoFeed">
+            </div>
+            <div class="snapped-feed" style="flex: 1;">
+                <h2 id="snappedImageHeading">Last Analyzed Image</h2>
+                <div id="referenceImageStatus" style="margin-bottom: 10px; font-style: italic; color: #555;"></div>
+                <img src="/last_snapped_image" alt="Last Snapped / Generated Reference" id="snappedImage" style="width:100%;border:2px solid #aaa;margin-top:10px; display: none;">
+            </div>
+        </main>
+
+        <footer>
+            <p>AI Drawing Assistant - Comic Art Helper</p>
+        </footer>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const socket = io();
+            const assistanceBtn = document.getElementById('assistanceBtn');
+            const restartSessionBtn = document.getElementById('restartSessionBtn');
+            const ttsSpeedSlider = document.getElementById('ttsSpeedSlider');
+            const ttsSpeedValue = document.getElementById('ttsSpeedValue');
+            const ttsToggleBtn = document.getElementById('ttsToggleBtn');
+            const systemPromptInput = document.getElementById('systemPromptInput');
+            const updatePromptBtn = document.getElementById('updatePromptBtn');
+            const snappedImage = document.getElementById('snappedImage');
+            const snappedImageHeading = document.getElementById('snappedImageHeading');
+            const loadingBar = document.getElementById('loadingBar');
+            const loadingBarInner = document.getElementById('loadingBarInner');
+            const feedbackText = document.getElementById('feedbackText');
+            const ttsVoiceSelect = document.getElementById('ttsVoiceSelect');
+            const generateReferenceBtn = document.getElementById('generateReferenceBtn');
+            const referenceImageStatus = document.getElementById('referenceImageStatus');
+            let ttsEnabled = true;
+
+            function refreshSnappedImage(isReference = false, imagePath = null) {
+                snappedImageHeading.textContent = isReference ? "Generated Reference" : "Last Analyzed Image";
+                snappedImage.src = (isReference ? imagePath : '/last_snapped_image') + '?' + new Date().getTime();
+                snappedImage.style.display = 'block';
+                if (!isReference) {
+                    referenceImageStatus.textContent = "";
+                }
+            }
+
+            // TTS speed slider
+            ttsSpeedSlider.addEventListener('input', function() {
+                ttsSpeedValue.textContent = ttsSpeedSlider.value;
+                fetch('/set_tts_speed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rate: parseInt(ttsSpeedSlider.value) })
+                });
+            });
+
+            // TTS toggle button
+            ttsToggleBtn.addEventListener('click', function() {
+                ttsEnabled = !ttsEnabled;
+                ttsToggleBtn.textContent = ttsEnabled ? "🔊" : "🔇";
+                fetch('/set_tts_enabled', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: ttsEnabled })
+                });
+            });
+
+            // Populate TTS voices dropdown
+            fetch('/get_tts_voices')
+                .then(response => response.json())
+                .then(voices => {
+                    voices.forEach(voice => {
+                        const option = document.createElement('option');
+                        option.value = voice.id;
+                        option.textContent = voice.name;
+                        ttsVoiceSelect.appendChild(option);
+                    });
+                });
+
+            // Handle voice selection change
+            ttsVoiceSelect.addEventListener('change', function() {
+                const selectedVoiceId = ttsVoiceSelect.value;
+                fetch('/set_tts_voice', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ voice_id: selectedVoiceId })
+                });
+            });
+
+            // Handle assistance button click
+            assistanceBtn.addEventListener('click', function() {
+                feedbackText.innerHTML = '<p>Analyzing your drawing...</p>';
+                referenceImageStatus.textContent = "";
+                generateReferenceBtn.disabled = true;
+
+                fetch('/request_assistance', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Assistance requested:', data);
+                    if (data.error) {
+                        feedbackText.innerHTML = `<p>Error: ${data.error}</p>`;
+                        return;
+                    }
+                    refreshSnappedImage(false);
+                    generateReferenceBtn.disabled = false;
+                })
+                .catch(error => {
+                    console.error('Error requesting assistance:', error);
+                    feedbackText.innerHTML = '<p>Error requesting assistance. Please try again.</p>';
+                });
+            });
+
+            // Handle restart session button click
+            restartSessionBtn.addEventListener('click', function() {
+                fetch('/restart_session', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    feedbackText.innerHTML = `<p><em>${data.message}</em></p>`;
+                });
+            });
+
+            // Update system prompt
+            updatePromptBtn.addEventListener('click', function() {
+                const prompt = systemPromptInput.value;
+                if (!prompt) return;
+                loadingBar.style.display = 'block';
+                loadingBarInner.style.width = '10%';
+                fetch('/update_system_prompt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    loadingBarInner.style.width = '100%';
+                    setTimeout(() => { loadingBar.style.display = 'none'; loadingBarInner.style.width = '0'; }, 800);
+                    feedbackText.innerHTML += `<p><em>System prompt updated.</em></p>`;
+                })
+                .catch(() => {
+                    feedbackText.innerHTML += `<p><em>Error updating system prompt.</em></p>`;
+                    loadingBar.style.display = 'none';
+                });
+            });
+
+            // Handle Generate Reference button click
+            generateReferenceBtn.addEventListener('click', function() {
+                referenceImageStatus.textContent = 'Generating reference image... Please wait.';
+                generateReferenceBtn.disabled = true;
+                generateReferenceBtn.textContent = "Generating...";
+
+                fetch('/generate_reference', { method: 'POST' })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(errData => {
+                            throw new Error(errData.error || `HTTP error! status: ${response.status}`);
+                        }).catch(() => {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Generate reference response:', data);
+                    if (data.status === 'success') {
+                        referenceImageStatus.textContent = "Generation started, waiting for image data...";
+                    } else {
+                        referenceImageStatus.textContent = `Error generating reference: ${data.message || data.error || 'Unknown error'}`;
+                        generateReferenceBtn.disabled = false;
+                        generateReferenceBtn.textContent = "Generate Reference";
+                    }
+                })
+                .catch(error => {
+                    console.error('Error generating reference:', error);
+                    referenceImageStatus.textContent = `Error generating reference: ${error.message}`;
+                    generateReferenceBtn.disabled = false;
+                    generateReferenceBtn.textContent = "Generate Reference";
+                });
+            });
+
+            // Handle streaming responses
+            socket.on('assistance_response', function(data) {
+                feedbackText.innerHTML = `<p>${data.text.replace(/\n/g, '<br>')}</p>`;
+            });
+
+            // Handle reference image ready event
+            socket.on('reference_image_ready', function(data) {
+                console.log('Reference image ready:', data);
+                if (data.image_path) {
+                    refreshSnappedImage(true, data.image_path);
+                    referenceImageStatus.textContent = "Reference image generated successfully.";
+                } else {
+                    referenceImageStatus.textContent = "Failed to load reference image path.";
+                }
+                generateReferenceBtn.disabled = false;
+                generateReferenceBtn.textContent = "Generate Reference";
+            });
+
+            // Handle connection
+            socket.on('connect', function() {
+                console.log('Connected to server');
+            });
+
+            socket.on('disconnect', function() {
+                console.log('Disconnected from server');
+                feedbackText.innerHTML += '<p>Connection lost. Reconnecting...</p>';
+            });
+        });
+    </script>
+</body>
+</html>

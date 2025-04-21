@@ -1,0 +1,22 @@
+# Core dependencies
+Flask>=2.3.0
+Flask-SocketIO>=5.3.0
+python-socketio>=5.9.0
+python-dotenv>=1.0.0
+opencv-python>=4.8.0
+numpy>=1.25.0
+Pillow>=10.0.0
+requests>=2.31.0
+pyttsx3>=2.90
+
+# API client libraries
+openai>=1.3.0
+anthropic>=0.5.0
+
+# Google Cloud
+google-cloud-aiplatform>=1.40.0
+
+# Development tools
+pytest>=7.4.0
+black>=23.9.0
+flake8>=6.1.0
